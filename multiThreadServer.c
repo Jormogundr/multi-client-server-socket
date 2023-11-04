@@ -41,6 +41,7 @@ int listener;  // listening socket descriptor
 int fdmax;
 
 map<string, string> user_credentials;
+map<string, string> active_users;
 
 class Server
 {
@@ -89,6 +90,11 @@ public:
         {
             user_credentials.insert(make_pair(users[i], passwords[i]));
         }
+    }
+
+    void addActiveUser(string currentUser, char *ip_addr)
+    {
+        active_users.insert(make_pair(currentUser, ip_addr));
     }
 
     // helper to allow user to MSGSTORE
@@ -148,8 +154,15 @@ public:
     }
 
     // LOGIN
-    void login(char *args, char *buf)
+    void login(char *args, char *buf, char *ip_addr, char *user)
     {
+        // check first if we are already logged in 
+        if (getAuthenticated()) {
+            string success_str = "200, You are already logged in! Nothing to do. \n";
+            char *success = const_cast<char *>(success_str.c_str());
+            memcpy(buf, success, MAX_LINE);
+            return;
+        }
         char *pch;
         pch = strtok(args, " ");
         int counter = 0;
@@ -205,6 +218,13 @@ public:
             char *failure = const_cast<char *>(fail_str.c_str());
             memcpy(buf, failure, MAX_LINE);
         }
+        string currentUser;
+        currentUser = credentials[0];
+        cout << currentUser << " has logged in successfully." << endl;
+
+        // add user:ip_addr mapping
+        addActiveUser(currentUser, ip_addr);
+        memcpy(user, const_cast<char *>(currentUser.c_str()), MAX_LINE);
     }
 
     // helper for various credentials related functions
@@ -221,13 +241,17 @@ public:
     }
 
     // LOGOUT
-    void logout(char *buf)
+    void logout(char *buf, char *user)
     {
         string res_code = "200, OK";
         char *response = const_cast<char *>(res_code.c_str());
         memcpy(buf, response, MAX_LINE);
         setAuthenticated(false);
         isRoot = false;
+
+        // delete user from the map of active users
+        string k(user);
+        active_users.erase(k);
     }
 
     void quit(char *buf)
@@ -269,7 +293,7 @@ struct readThreadParams
 // the child thread, used to handle interactions with the client
 void *ChildThread(void *context)
 {
-    struct readThreadParams *readParams = (struct readThreadParams*)context;
+    struct readThreadParams *readParams = (struct readThreadParams *)context;
     char buf[MAX_LINE];
     int nbytes;
     int i, j;
@@ -311,6 +335,7 @@ void *ChildThread(void *context)
             memcpy(unmodified_buf, buf, MAX_LINE);
             char *token = strtok(buf, " ");
             string command(token);
+            char instance_user[MAX_LINE]; // store the name of the current user in the thread, not the server object
 
             if (command == "MSGGET\n")
             {
@@ -337,13 +362,37 @@ void *ChildThread(void *context)
             {
                 // newline char delimits the end of the command provided by user
                 char *args = strtok(unmodified_buf, "\n");
-                readParams->server->login(args, buf);
+                readParams->server->login(args, buf, inet_ntoa(readParams->remote_addr->sin_addr), instance_user);
                 send(childSocket, buf, MAX_LINE, 0);
             }
             else if (command == "LOGOUT\n")
             {
-                readParams->server->logout(response);
+                readParams->server->logout(response, instance_user);
                 send(childSocket, response, MAX_LINE, 0);
+            }
+            else if (command == "WHO\n")
+            {
+                if (!active_users.empty())
+                {
+                    string who = "200 OK \n";
+                    for (auto const &x : active_users)
+                    {
+                        who.append(x.first);
+                        who.append(":");
+                        who.append(x.second);
+                        who.append("\n");
+                    }
+                    char *response = const_cast<char *>(who.c_str());
+                    memcpy(buf, response, MAX_LINE);
+                    send(childSocket, response, MAX_LINE, 0);
+
+                    // TODO: Handle case where who.length() > MAX_LINE
+                }
+                else
+                {
+                    // inform client nobody is logged in
+                    send(childSocket, "204, OK - Nobody is logged in.\n", MAX_LINE, 0);
+                }
             }
             else if (command == "MSGSTORE\n")
             {
@@ -405,6 +454,7 @@ int main(void)
     socklen_t addrlen;
 
     pthread_t cThread;
+    Server motd;
 
     FD_ZERO(&master); // clear the master and temp sets
 
@@ -465,12 +515,6 @@ int main(void)
             cout << "multiThreadServer: new connection from "
                  << inet_ntoa(remoteaddr.sin_addr)
                  << " socket " << newfd << endl;
-
-            // client network information
-            printf("(Server) IP address is: %s\n", inet_ntoa(remoteaddr.sin_addr));
-            printf("(Server) port is: %d\n", (int)ntohs(remoteaddr.sin_port));
-            // TODO: may need to be more thoughtful about where I'm placing this intialization. Does each thread need a copy, or a single server instance?
-            Server motd;
 
             // initialize args struct
             args.newfd = newfd;

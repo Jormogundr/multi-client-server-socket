@@ -115,11 +115,17 @@ int main(int argc, char *argv[])
           cout << "ECHO: " << rbuf << endl;
           exit(0);
         }
-        else if (command == "LOGIN")
+        else if (command == "WHO\n")
         {
           send(s, args, MAX_LINE, 0);
           recv(s, rbuf, MAX_LINE, 0);
           cout << "ECHO: " << rbuf << endl;
+        }
+        else if (command == "LOGIN")
+        {
+          send(s, args, MAX_LINE, 0);
+          recv(s, rbuf, MAX_LINE, 0);
+          cout << rbuf << endl;
         }
         else if (command == "LOGIN\n")
         {
