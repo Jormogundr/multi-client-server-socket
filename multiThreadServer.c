@@ -41,7 +41,8 @@ int listener;  // listening socket descriptor
 int fdmax;
 
 map<string, string> user_credentials;
-map<string, string> active_users;
+map<string, string> name_ip_map;
+map<string, int> name_fd_map;
 
 class Server
 {
@@ -88,9 +89,14 @@ public:
         }
     }
 
-    void addActiveUser(string currentUser, char *ip_addr)
+    void addActiveUserIP(string currentUser, char *ip_addr)
     {
-        active_users.insert(make_pair(currentUser, ip_addr));
+        name_ip_map.insert(make_pair(currentUser, ip_addr));
+    }
+
+    void addActiveUserFD(string currentUser, int fd)
+    {
+        name_fd_map.insert(make_pair(currentUser, fd));
     }
 
     // helper to allow user to MSGSTORE
@@ -150,7 +156,7 @@ public:
     }
 
     // LOGIN
-    void login(char *args, char *buf, char *ip_addr, char *user, bool *isAuthenticated, bool *isRoot)
+    void login(char *args, char *buf, char *ip_addr, int fd, char *user, bool *isAuthenticated, bool *isRoot)
     {
         // check first if we are already logged in
         if (*isAuthenticated)
@@ -220,8 +226,14 @@ public:
         cout << currentUser << " has logged in successfully." << endl;
 
         // add user:ip_addr mapping
-        addActiveUser(currentUser, ip_addr);
+        addActiveUserIP(currentUser, ip_addr);
         memcpy(user, const_cast<char *>(currentUser.c_str()), MAX_LINE);
+
+        // add user:socket_fd mapping
+        addActiveUserFD(currentUser, fd);
+
+        cout << "add " << currentUser << " to fd map with fd " << fd << endl;
+        cout << "add " << currentUser << " to ip map with ip " << ip_addr << endl;
     }
 
     // helper for various credentials related functions
@@ -246,7 +258,8 @@ public:
 
         // delete user from the map of active users
         string k(user);
-        active_users.erase(k);
+        name_ip_map.erase(k);
+        name_fd_map.erase(k);
     }
 
     void quit(char *buf)
@@ -267,7 +280,7 @@ struct readThreadParams
 {
     int newfd;
     Server *server;
-    struct sockaddr_in *remote_addr;
+    struct sockaddr_in *remote_sock;
 } args;
 
 // the child thread, used to handle interactions with the client
@@ -279,16 +292,16 @@ void *ChildThread(void *context)
     int i, j;
     int childSocket = (long)readParams->newfd;
 
-    printf("(Server) IP address is: %s\n", inet_ntoa(readParams->remote_addr->sin_addr));
-    printf("(Server) port is: %d\n", (int)ntohs(readParams->remote_addr->sin_port));
+    printf("(Server) New client connected\n");
+    printf("(Server) IP address is: %s\n", inet_ntoa(readParams->remote_sock->sin_addr));
+    printf("(Server) port is: %d\n", (int)ntohs(readParams->remote_sock->sin_port));
+    printf("(Server) Socket FD: %d\n", childSocket);
+    cout << endl;
 
     // user state stored in each thread on a per session basis
     bool isAuthenticated = false;
     bool isRoot = false;
-    char *ip_addr = inet_ntoa(readParams->remote_addr->sin_addr);
-
-    cout << isRoot << &isRoot << endl;
-    cout << isAuthenticated << &isAuthenticated << endl;
+    char *ip_addr = inet_ntoa(readParams->remote_sock->sin_addr);
 
     while (1)
     {
@@ -354,7 +367,7 @@ void *ChildThread(void *context)
             {
                 // newline char delimits the end of the command provided by user
                 char *args = strtok(unmodified_buf, "\n");
-                readParams->server->login(args, buf, ip_addr, instance_user, &isAuthenticated, &isRoot);
+                readParams->server->login(args, buf, ip_addr, childSocket, instance_user, &isAuthenticated, &isRoot);
                 send(childSocket, buf, MAX_LINE, 0);
             }
             else if (command == "LOGOUT\n")
@@ -364,12 +377,62 @@ void *ChildThread(void *context)
                 isAuthenticated = false;
                 isRoot = false;
             }
+            else if (command == "SEND")
+            {
+                if (name_fd_map.find(string(instance_user)) == name_fd_map.end()) {
+                    send(childSocket, "420 - You are not signed in.\n", MAX_LINE, 0);
+                    continue;
+                }
+                char *pch;
+                char *args = strtok(unmodified_buf, "\n");
+                pch = strtok(args, " ");
+                int counter = 0;
+                string user;
+                int dst_fd;
+                while (pch != NULL)
+                {
+                    if (counter == 0)
+                    {
+                        counter++;
+                        pch = strtok(NULL, " ");
+                        continue;
+                    }
+                    else if (counter == 1)
+                    {
+                        // user is the string key needed for name_fd_map lookup, to resolve the relevant fd for destination
+                        string u(pch);
+                        user = u;
+                        if (name_fd_map.find(user) == name_fd_map.end())
+                        {
+                            send(childSocket, "420 - Either the user does not exist or is not logged in\n", MAX_LINE, 0);
+                            break;
+                        }
+                        else
+                        {
+                            dst_fd = name_fd_map.find(user)->second;
+                            pch = strtok(NULL, "\n");
+                            string msg = string(pch);
+                            string res = "200 OK - You have a new message from ";
+                            string src_user = string(instance_user);
+                            res.append(src_user);
+                            res.append(": ");
+                            res.append(msg);
+                            res.append("\n");
+                            char *response = const_cast<char *>(res.c_str());
+                            memcpy(buf, response, MAX_LINE);
+                            send(dst_fd, response, MAX_LINE, 0);
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
             else if (command == "WHO\n")
             {
-                if (!active_users.empty())
+                if (!name_ip_map.empty())
                 {
                     string who = "200 OK \n";
-                    for (auto const &x : active_users)
+                    for (auto const &x : name_ip_map)
                     {
                         who.append(x.first);
                         who.append(":");
@@ -428,7 +491,6 @@ void *ChildThread(void *context)
                 {
                     send(childSocket, "403 - Only root can perform this operation.\n", MAX_LINE, 0);
                 }
-                // broadcast -- send response form server back to EVERY connection/client, which we only want to do if server is shutdown. Else, send response back to specific client.
             }
             else
             {
@@ -514,7 +576,7 @@ int main(void)
             // initialize args struct
             args.newfd = newfd;
             args.server = &motd;
-            args.remote_addr = &remoteaddr;
+            args.remote_sock = &remoteaddr;
 
             if (newfd > fdmax)
             { // keep track of the maximum

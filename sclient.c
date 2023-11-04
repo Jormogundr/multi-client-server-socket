@@ -50,11 +50,13 @@ int main(int argc, char *argv[])
   sin.sin_port = htons(SERVER_PORT);
 
   // client network information
-  // printf("IP address is: %s\n", inet_ntoa(sin.sin_addr));
-  // printf("port is: %d\n", (int) ntohs(sin.sin_port));
+  printf("(Client) New client connected\n");
+  printf("(Client) IP address is: %s\n", inet_ntoa(sin.sin_addr));
+  printf("(Client) port is: %d\n", (int)ntohs(sin.sin_port));
+  printf("(Client) Socket FD: %d\n", s);
+  cout << endl;
 
-
-  // check if we can connect 
+  // check if we can connect
   if (connect(s, (struct sockaddr *)&sin, sizeof(sin)) < 0)
   {
     perror("select client: connect");
@@ -91,8 +93,6 @@ int main(int argc, char *argv[])
         buf[MAX_LINE - 1] = '\0';
         len = strlen(buf) + 1;
 
-        // start command line interpretation and handling
-
         // store all command line args for possible use
         char args[MAX_LINE];
         strcpy(args, buf);
@@ -111,11 +111,21 @@ int main(int argc, char *argv[])
         {
           send(s, buf, MAX_LINE, 0);
           recv(s, rbuf, MAX_LINE, 0);
-          // TODO: cleanup memory before quitting?
           cout << "ECHO: " << rbuf << endl;
           exit(0);
         }
         else if (command == "WHO\n")
+        {
+          send(s, args, MAX_LINE, 0);
+          recv(s, rbuf, MAX_LINE, 0);
+          cout << "ECHO: " << rbuf << endl;
+        }
+        else if (command == "SEND\n")
+        {
+          cout << "ERROR: You must provide a name to send to.\n"
+               << endl;
+        }
+        else if (command == "SEND")
         {
           send(s, args, MAX_LINE, 0);
           recv(s, rbuf, MAX_LINE, 0);
