@@ -2,6 +2,18 @@
  * multiThreadServer.c -- a multithreaded server
  */
 
+// make a table
+// each time a client connects, get an ip and socket fd number, and user id
+
+// socket #	| 	IP 	|	 user ID
+// 4		127.0.0.1		John
+// 5		141.215.202.69		David
+
+// depending on the command we receive from the client, the server can simply send a single string back to client containing e.g. "200 OK \n List of active users are:\n ...."
+
+// SHUTDOWN command
+// use exit() to temrinate all threads on machine during shutdown, otherwise use pthread_exit to shutdown specific machines
+
 #include <iostream>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,7 +28,7 @@
 #include <cstdlib>
 #include <string>
 #include <map>
-#include <cassert> 
+#include <cassert>
 #include <vector>
 
 using namespace std;
@@ -245,16 +257,27 @@ public:
     }
 };
 
-// the child thread, used to handle interactions with the client
-void *ChildThread(void *newfd)
+// struct for passing arguments to ChildThread
+// TODO: prevent race conditions when different ChildThreads change these different vars
+struct readThreadParams
 {
+    int newfd;
+    Server *server;
+    struct sockaddr_in *remote_addr;
+} args;
+
+// the child thread, used to handle interactions with the client
+void *ChildThread(void *context)
+{
+    struct readThreadParams *readParams = (struct readThreadParams*)context;
     char buf[MAX_LINE];
     int nbytes;
     int i, j;
-    int childSocket = (long)newfd;
+    int childSocket = (long)readParams->newfd;
 
-    // TODO: may need to be more thoughtful about where I'm placing this intialization. Does each thread need a copy, or a single server instance?
-    Server motd;
+    printf("(Server) IP address is: %s\n", inet_ntoa(readParams->remote_addr->sin_addr));
+    printf("(Server) port is: %d\n", (int)ntohs(readParams->remote_addr->sin_port));
+
     while (1)
     {
         // handle data from a client
@@ -276,7 +299,7 @@ void *ChildThread(void *newfd)
             pthread_exit(0);
         }
         else
-        { // we read some bytes from the buffer sent by client, so do something with it
+        { // we read some bytes (a command) from the buffer sent by client, so do something with it
             // we got some data from a client
             cout << buf;
 
@@ -291,9 +314,9 @@ void *ChildThread(void *newfd)
 
             if (command == "MSGGET\n")
             {
-                if (motd.getAuthenticated())
+                if (readParams->server->getAuthenticated())
                 {
-                    motd.buildMessage(buf);
+                    readParams->server->buildMessage(buf);
                 }
                 else
                 {
@@ -305,7 +328,7 @@ void *ChildThread(void *newfd)
             }
             else if (command == "QUIT\n")
             {
-                motd.quit(response);
+                readParams->server->quit(response);
                 send(childSocket, response, MAX_LINE, 0);
                 exit(0);
             }
@@ -314,12 +337,12 @@ void *ChildThread(void *newfd)
             {
                 // newline char delimits the end of the command provided by user
                 char *args = strtok(unmodified_buf, "\n");
-                motd.login(args, buf);
+                readParams->server->login(args, buf);
                 send(childSocket, buf, MAX_LINE, 0);
             }
             else if (command == "LOGOUT\n")
             {
-                motd.logout(response);
+                readParams->server->logout(response);
                 send(childSocket, response, MAX_LINE, 0);
             }
             else if (command == "MSGSTORE\n")
@@ -327,27 +350,41 @@ void *ChildThread(void *newfd)
                 // newline char delimits the end of the command provided by user
                 char *args = strtok(unmodified_buf, "\n");
                 bool authorized;
-                motd.validateUser(buf) ? authorized = true : authorized = false;
+                readParams->server->validateUser(buf) ? authorized = true : authorized = false;
                 send(childSocket, buf, MAX_LINE, 0);
                 if (authorized)
                 {
                     cout << "Server: waiting for user input..." << endl;
                     recv(childSocket, buf, MAX_LINE, 0);
                     cout << "Server: received message: " << buf << endl;
-                    motd.storeMessage(buf);
+                    readParams->server->storeMessage(buf);
                     send(childSocket, buf, MAX_LINE, 0);
                 }
             }
             else if (command == "SHUTDOWN\n")
             {
                 bool authorized;
-                motd.validateUser(buf) ? authorized = true : authorized = false;
-                cout << buf << motd.getIsRoot() << endl;
-                if (authorized == true && motd.getIsRoot())
+                readParams->server->validateUser(buf) ? authorized = true : authorized = false;
+                cout << buf << readParams->server->getIsRoot() << endl;
+                if (authorized == true && readParams->server->getIsRoot())
                 {
-                    motd.shutdown(buf, childSocket);
+                    readParams->server->shutdown(buf, childSocket);
                 }
-                send(childSocket, buf, MAX_LINE, 0);
+                // broadcast -- send response form server back to EVERY connection/client, which we only want to do if server is shutdown. Else, send response back to specific client.
+                for (j = 0; j <= fdmax; j++)
+                {
+                    if (FD_ISSET(j, &master))
+                    {
+                        // except the listener and ourselves
+                        if (j != listener && j != childSocket)
+                        {
+                            if (send(j, buf, nbytes, 0) == -1)
+                            {
+                                perror("send");
+                            }
+                        }
+                    }
+                }
             }
             else
             {
@@ -355,22 +392,6 @@ void *ChildThread(void *newfd)
             }
             // flush the buffer
             memset(buf, 0, MAX_LINE);
-
-            // broadcast -- send response form server back to EVERY connection/client, which we only want to do if server is shutdown. Else, send response back to specific client.
-            for (j = 0; j <= fdmax; j++)
-            {
-                if (FD_ISSET(j, &master))
-                {
-                    // except the listener and ourselves
-                    if (j != listener && j != childSocket)
-                    {
-                        if (send(j, buf, nbytes, 0) == -1)
-                        {
-                            perror("send");
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -445,12 +466,23 @@ int main(void)
                  << inet_ntoa(remoteaddr.sin_addr)
                  << " socket " << newfd << endl;
 
+            // client network information
+            printf("(Server) IP address is: %s\n", inet_ntoa(remoteaddr.sin_addr));
+            printf("(Server) port is: %d\n", (int)ntohs(remoteaddr.sin_port));
+            // TODO: may need to be more thoughtful about where I'm placing this intialization. Does each thread need a copy, or a single server instance?
+            Server motd;
+
+            // initialize args struct
+            args.newfd = newfd;
+            args.server = &motd;
+            args.remote_addr = &remoteaddr;
+
             if (newfd > fdmax)
             { // keep track of the maximum
                 fdmax = newfd;
             }
             // for successful connection, create child process to run client/server interactions handled by ChildThread, which runs indefinitely
-            if (pthread_create(&cThread, NULL, ChildThread, (void *)(intptr_t)newfd) < 0)
+            if (pthread_create(&cThread, NULL, ChildThread, &args) < 0)
             {
                 perror("pthread_create");
                 exit(1);

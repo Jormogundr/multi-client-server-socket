@@ -49,6 +49,12 @@ int main(int argc, char *argv[])
   sin.sin_addr.s_addr = inet_addr(argv[1]);
   sin.sin_port = htons(SERVER_PORT);
 
+  // client network information
+  // printf("IP address is: %s\n", inet_ntoa(sin.sin_addr));
+  // printf("port is: %d\n", (int) ntohs(sin.sin_port));
+
+
+  // check if we can connect 
   if (connect(s, (struct sockaddr *)&sin, sizeof(sin)) < 0)
   {
     perror("select client: connect");
