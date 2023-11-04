@@ -51,8 +51,6 @@ public:
     int current_message_idx;
     int current_message_size;
     // store user state
-    bool authenticated;
-    bool isRoot;
     vector<string> messages{
         "You create your own opportunities.\n",
         "Never break your promises.\n",
@@ -80,8 +78,6 @@ public:
     {
         current_message_idx = 0;
         num_messages = messages.size();
-        authenticated = false;
-        isRoot = false;
 
         // initialize the user_credentials map
         vector<string> users = {"root", "john", "david", "mary"};
@@ -115,9 +111,9 @@ public:
     }
 
     // Check if user has authenticated with LOGIN, return false is not
-    bool validateUser(char *buf)
+    bool validateUser(char *buf, bool *isAuthenticated)
     {
-        if (getAuthenticated() == false)
+        if (*isAuthenticated == false)
         {
             string not_authorized = "401, Permission denied\n";
             char *failure = const_cast<char *>(not_authorized.c_str());
@@ -144,7 +140,7 @@ public:
     // main function for SHUTDOWN
     void shutdown(char *buf, int socket)
     {
-        cout << "Sever: Shutting down..." << endl;
+        cout << "(Server): Shutting down..." << endl;
         string authorized = "200, Shutting server down\n";
         char *success = const_cast<char *>(authorized.c_str());
         memcpy(buf, success, MAX_LINE);
@@ -154,10 +150,11 @@ public:
     }
 
     // LOGIN
-    void login(char *args, char *buf, char *ip_addr, char *user)
+    void login(char *args, char *buf, char *ip_addr, char *user, bool *isAuthenticated, bool *isRoot)
     {
-        // check first if we are already logged in 
-        if (getAuthenticated()) {
+        // check first if we are already logged in
+        if (*isAuthenticated)
+        {
             string success_str = "200, You are already logged in! Nothing to do. \n";
             char *success = const_cast<char *>(success_str.c_str());
             memcpy(buf, success, MAX_LINE);
@@ -205,12 +202,12 @@ public:
         {
             if (credentials[0] == "root")
             {
-                isRoot = true;
+                *isRoot = true;
             }
             string success_str = "200, Authentication success\n";
             char *success = const_cast<char *>(success_str.c_str());
             memcpy(buf, success, MAX_LINE);
-            setAuthenticated(true);
+            *isAuthenticated = true;
         }
         else
         {
@@ -246,8 +243,6 @@ public:
         string res_code = "200, OK";
         char *response = const_cast<char *>(res_code.c_str());
         memcpy(buf, response, MAX_LINE);
-        setAuthenticated(false);
-        isRoot = false;
 
         // delete user from the map of active users
         string k(user);
@@ -263,21 +258,6 @@ public:
     void setMessageSize(char *msg)
     {
         current_message_size = (sizeof(msg) / sizeof(msg[0]));
-    }
-
-    void setAuthenticated(bool flag)
-    {
-        authenticated = flag;
-    }
-
-    bool getAuthenticated()
-    {
-        return authenticated;
-    }
-
-    bool getIsRoot()
-    {
-        return isRoot;
     }
 };
 
@@ -301,6 +281,14 @@ void *ChildThread(void *context)
 
     printf("(Server) IP address is: %s\n", inet_ntoa(readParams->remote_addr->sin_addr));
     printf("(Server) port is: %d\n", (int)ntohs(readParams->remote_addr->sin_port));
+
+    // user state stored in each thread on a per session basis
+    bool isAuthenticated = false;
+    bool isRoot = false;
+    char *ip_addr = inet_ntoa(readParams->remote_addr->sin_addr);
+
+    cout << isRoot << &isRoot << endl;
+    cout << isAuthenticated << &isAuthenticated << endl;
 
     while (1)
     {
@@ -335,11 +323,13 @@ void *ChildThread(void *context)
             memcpy(unmodified_buf, buf, MAX_LINE);
             char *token = strtok(buf, " ");
             string command(token);
+
+            // session state (per command basis)
             char instance_user[MAX_LINE]; // store the name of the current user in the thread, not the server object
 
             if (command == "MSGGET\n")
             {
-                if (readParams->server->getAuthenticated())
+                if (isAuthenticated)
                 {
                     readParams->server->buildMessage(buf);
                 }
@@ -354,6 +344,8 @@ void *ChildThread(void *context)
             else if (command == "QUIT\n")
             {
                 readParams->server->quit(response);
+                isAuthenticated = false;
+                isRoot = false;
                 send(childSocket, response, MAX_LINE, 0);
                 exit(0);
             }
@@ -362,13 +354,15 @@ void *ChildThread(void *context)
             {
                 // newline char delimits the end of the command provided by user
                 char *args = strtok(unmodified_buf, "\n");
-                readParams->server->login(args, buf, inet_ntoa(readParams->remote_addr->sin_addr), instance_user);
+                readParams->server->login(args, buf, ip_addr, instance_user, &isAuthenticated, &isRoot);
                 send(childSocket, buf, MAX_LINE, 0);
             }
             else if (command == "LOGOUT\n")
             {
                 readParams->server->logout(response, instance_user);
                 send(childSocket, response, MAX_LINE, 0);
+                isAuthenticated = false;
+                isRoot = false;
             }
             else if (command == "WHO\n")
             {
@@ -399,7 +393,7 @@ void *ChildThread(void *context)
                 // newline char delimits the end of the command provided by user
                 char *args = strtok(unmodified_buf, "\n");
                 bool authorized;
-                readParams->server->validateUser(buf) ? authorized = true : authorized = false;
+                readParams->server->validateUser(buf, &isAuthenticated) ? authorized = true : authorized = false;
                 send(childSocket, buf, MAX_LINE, 0);
                 if (authorized)
                 {
@@ -412,28 +406,29 @@ void *ChildThread(void *context)
             }
             else if (command == "SHUTDOWN\n")
             {
-                bool authorized;
-                readParams->server->validateUser(buf) ? authorized = true : authorized = false;
-                cout << buf << readParams->server->getIsRoot() << endl;
-                if (authorized == true && readParams->server->getIsRoot())
+                if (isRoot)
                 {
                     readParams->server->shutdown(buf, childSocket);
-                }
-                // broadcast -- send response form server back to EVERY connection/client, which we only want to do if server is shutdown. Else, send response back to specific client.
-                for (j = 0; j <= fdmax; j++)
-                {
-                    if (FD_ISSET(j, &master))
+                    for (j = 0; j <= fdmax; j++)
                     {
-                        // except the listener and ourselves
-                        if (j != listener && j != childSocket)
+                        if (FD_ISSET(j, &master))
                         {
-                            if (send(j, buf, nbytes, 0) == -1)
+                            // except the listener and ourselves
+                            if (j != listener && j != childSocket)
                             {
-                                perror("send");
+                                if (send(j, buf, nbytes, 0) == -1)
+                                {
+                                    perror("send");
+                                }
                             }
                         }
                     }
                 }
+                else
+                {
+                    send(childSocket, "403 - Only root can perform this operation.\n", MAX_LINE, 0);
+                }
+                // broadcast -- send response form server back to EVERY connection/client, which we only want to do if server is shutdown. Else, send response back to specific client.
             }
             else
             {
