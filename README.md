@@ -6,6 +6,8 @@ Because I make use of the unordered_map data structure in this program, this pro
 
 Sidenote: The gcc cpp standard libraries on the UMD servers are extraordinarily old. Please build these on a system that has GLIBCXX_3.4.21, at a minimum. 
 
+Use `make all` to build the source code. The binaries will appear in the `bin` folder. Use `make clean` to remove build files and the binaries.
+
 ## Running
 
 Run the `server` binary first in your terminal, then run the `client` binary. The client requires that a host address be provided as an argument. During development I used the localhost address `127.0.0.1` for testing.
