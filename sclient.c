@@ -173,8 +173,12 @@ int main(int argc, char *argv[])
           cout << "ECHO: " << rbuf << endl;
           if (strncmp(rbuf, "200", 3) == 0)
           {
-            cout << "Closing client." << endl;
+            close(s);
             exit(0);
+          }
+          else
+          {
+            cout << "There was an error shutting the server down. Please try again" << endl;
           }
         }
         else
@@ -195,9 +199,17 @@ int main(int argc, char *argv[])
     // handle data from the server
     if (FD_ISSET(s, &read_fds))
     {
-      if (recv(s, buf, sizeof(buf), 0) > 0)
+      if (recv(s, rbuf, sizeof(buf), 0) > 0)
       {
-        cout << buf;
+        cout << rbuf;
+
+        // check if we are receiving broadcast to shutdown
+        if (strncmp(rbuf, "200", 3) == 0)
+        {
+          cout << "Closing client." << endl;
+          close(s);
+          exit(0);
+        }
       }
     }
   }

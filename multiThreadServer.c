@@ -143,18 +143,6 @@ public:
         setMessageSize(buf);
     }
 
-    // main function for SHUTDOWN
-    void shutdown(char *buf, int socket)
-    {
-        cout << "(Server): Shutting down..." << endl;
-        string authorized = "200, Shutting server down\n";
-        char *success = const_cast<char *>(authorized.c_str());
-        memcpy(buf, success, MAX_LINE);
-        send(socket, buf, MAX_LINE, 0);
-        close(socket);
-        exit(0);
-    }
-
     // LOGIN
     void login(char *args, char *buf, char *ip_addr, int fd, char *user, bool *isAuthenticated, bool *isRoot)
     {
@@ -231,9 +219,6 @@ public:
 
         // add user:socket_fd mapping
         addActiveUserFD(currentUser, fd);
-
-        cout << "add " << currentUser << " to fd map with fd " << fd << endl;
-        cout << "add " << currentUser << " to ip map with ip " << ip_addr << endl;
     }
 
     // helper for various credentials related functions
@@ -379,7 +364,8 @@ void *ChildThread(void *context)
             }
             else if (command == "SEND")
             {
-                if (name_fd_map.find(string(instance_user)) == name_fd_map.end()) {
+                if (name_fd_map.find(string(instance_user)) == name_fd_map.end())
+                {
                     send(childSocket, "420 - You are not signed in.\n", MAX_LINE, 0);
                     continue;
                 }
@@ -471,7 +457,7 @@ void *ChildThread(void *context)
             {
                 if (isRoot)
                 {
-                    readParams->server->shutdown(buf, childSocket);
+                    // broadcast shutdown to all connected clients
                     for (j = 0; j <= fdmax; j++)
                     {
                         if (FD_ISSET(j, &master))
@@ -481,12 +467,24 @@ void *ChildThread(void *context)
                             {
                                 if (send(j, buf, nbytes, 0) == -1)
                                 {
+                                    cout << "(Server) No bytes sent during shutdown broadcast \n";
                                     perror("send");
+                                }
+                                else
+                                {
+                                    send(j, "200 - Closing connection to clients.\n", MAX_LINE, 0);
+                                    close(j);
                                 }
                             }
                         }
                     }
+                    // finish cleanup - close the connection to client that sent shutdown, then close server
+                    send(childSocket, "200 - Closing connection to clients.\n", MAX_LINE, 0);
+                    close(childSocket);
+                    close(listener);
+                    exit(0);
                 }
+
                 else
                 {
                     send(childSocket, "403 - Only root can perform this operation.\n", MAX_LINE, 0);
