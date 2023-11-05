@@ -417,7 +417,7 @@ void *ChildThread(void *context)
             {
                 if (!name_ip_map.empty())
                 {
-                    string who = "200 OK \n";
+                    string who = "200 OK \n Current active users are: \n";
                     for (auto const &x : name_ip_map)
                     {
                         who.append(x.first);

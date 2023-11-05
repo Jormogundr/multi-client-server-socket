@@ -176,14 +176,10 @@ int main(int argc, char *argv[])
             close(s);
             exit(0);
           }
-          else
-          {
-            cout << "There was an error shutting the server down. Please try again" << endl;
-          }
         }
         else
         {
-          cout << "Client: Command not recognized" << endl;
+          cout << "Client: Command not recognized \n" << endl;
         }
         // flush buffers
         memset(buf, 0, MAX_LINE);
