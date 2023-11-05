@@ -4,6 +4,8 @@
 
 Because I make use of the unordered_map data structure in this program, this program should be compiled with g++ 9.4.0. You shouldn't need to re-build though -- just look in the `bin` folder for the compiled programs.
 
+Sidenote: The gcc cpp standard libraries on the UMD servers are extraordinarily old. Please build these on a system that has GLIBCXX_3.4.21, at a minimum. 
+
 ## Running
 
 Run the `server` binary first in your terminal, then run the `client` binary. The client requires that a host address be provided as an argument. During development I used the localhost address `127.0.0.1` for testing.
